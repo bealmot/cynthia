@@ -9,6 +9,7 @@
 
 # Output
 *.out
+bin/
 
 # IDE
 .idea/

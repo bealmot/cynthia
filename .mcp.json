@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cynthia": {
+      "type": "stdio",
+      "command": "./bin/cynthia-mcp",
+      "args": ["--tty", "/dev/ttys005"]
+    }
+  }
+}
