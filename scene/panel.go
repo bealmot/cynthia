@@ -8,6 +8,7 @@ import (
 	"github.com/bealmot/cynthia/canvas"
 	"github.com/bealmot/cynthia/compose"
 	"github.com/bealmot/cynthia/effect"
+	"github.com/bealmot/cynthia/widget"
 )
 
 // Panel is a scene graph node: a positioned canvas with compositing properties.
@@ -33,6 +34,10 @@ type Panel struct {
 	Effect effect.Effect  // procedural pixel content (fire, plasma, etc.)
 	Text   string         // ANSI text content stamped onto cell grid
 	Border border.Border  // animated border drawn on cell grid
+
+	// Interactive widget (optional). When set, Widget.View() overrides Text each frame.
+	Widget  widget.Widget
+	Focused bool
 }
 
 // NewPanel creates a panel with the given ID and dimensions.

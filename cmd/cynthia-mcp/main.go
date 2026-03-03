@@ -51,19 +51,20 @@ func run() error {
 	}
 
 	mode := canvas.ModeHalfBlock
-	engine := runtime.NewEngine(tty, cols, rows, *fps, mode)
 
-	// Enter alt screen and hide cursor on the tty.
-	fmt.Fprint(tty, "\x1b[?1049h\x1b[?25l")
+	// Use the BubbleTea-powered runtime for interactive widget support.
+	// BubbleTea reads input from the TTY and handles raw mode, mouse events,
+	// and cleanup automatically. MCP continues on stdin/stdout.
+	prog := runtime.NewProgram(tty, cols, rows, *fps, mode)
 
 	// Ensure cleanup on exit.
-	defer func() {
-		engine.Stop()
-		fmt.Fprint(tty, "\x1b[?25h\x1b[?1049l")
-	}()
+	defer prog.Quit()
 
-	// Start the render loop.
-	engine.Start()
+	// Start the BubbleTea render loop in the background.
+	progErr := make(chan error, 1)
+	go func() {
+		progErr <- prog.Run()
+	}()
 
 	// Handle SIGWINCH for terminal resize.
 	sigCh := make(chan os.Signal, 1)
@@ -71,9 +72,9 @@ func run() error {
 	go func() {
 		for range sigCh {
 			if c, r, err := term.GetSize(int(tty.Fd())); err == nil {
-				engine.Lock()
-				engine.Resize(c, r)
-				engine.Unlock()
+				prog.Lock()
+				prog.Resize(c, r)
+				prog.Unlock()
 			}
 		}
 	}()
@@ -83,6 +84,20 @@ func run() error {
 	defer stop()
 
 	// Run MCP server over stdio — blocks until client disconnects or signal.
-	srv := mcpserver.New(engine)
-	return srv.Run(ctx)
+	srv := mcpserver.NewWithProgram(prog)
+	mcpErr := srv.Run(ctx)
+
+	// Stop the BubbleTea program when MCP disconnects.
+	prog.Quit()
+
+	// If MCP exited cleanly, check if BubbleTea had an error.
+	if mcpErr == nil {
+		select {
+		case err := <-progErr:
+			return err
+		default:
+		}
+	}
+
+	return mcpErr
 }

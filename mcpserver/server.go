@@ -17,6 +17,7 @@ import (
 	"github.com/bealmot/cynthia/effect"
 	"github.com/bealmot/cynthia/runtime"
 	"github.com/bealmot/cynthia/scene"
+	"github.com/bealmot/cynthia/widget"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	// Blank import to register built-in effects.
@@ -26,10 +27,11 @@ import (
 // Server wraps the MCP server and the Cynthia runtime engine.
 type Server struct {
 	engine    *runtime.Engine
+	program   *runtime.Program
 	mcpServer *mcp.Server
 }
 
-// New creates an MCP server wired to the given engine.
+// New creates an MCP server wired to the given engine (non-interactive mode).
 func New(engine *runtime.Engine) *Server {
 	impl := &mcp.Implementation{
 		Name:    "cynthia",
@@ -43,6 +45,81 @@ func New(engine *runtime.Engine) *Server {
 	}
 	s.registerTools()
 	return s
+}
+
+// NewWithProgram creates an MCP server wired to the interactive BubbleTea runtime.
+func NewWithProgram(prog *runtime.Program) *Server {
+	impl := &mcp.Implementation{
+		Name:    "cynthia",
+		Version: "0.1.0",
+	}
+	mcpSrv := mcp.NewServer(impl, nil)
+
+	s := &Server{
+		program:   prog,
+		mcpServer: mcpSrv,
+	}
+	s.registerTools()
+	s.registerWidgetTools()
+	return s
+}
+
+// lock acquires the underlying runtime's mutex.
+func (s *Server) lock() {
+	if s.program != nil {
+		s.program.Lock()
+	} else {
+		s.engine.Lock()
+	}
+}
+
+// unlock releases the underlying runtime's mutex.
+func (s *Server) unlock() {
+	if s.program != nil {
+		s.program.Unlock()
+	} else {
+		s.engine.Unlock()
+	}
+}
+
+// scene returns the underlying scene.
+func (s *Server) scene() *scene.Scene {
+	if s.program != nil {
+		return s.program.Scene
+	}
+	return s.engine.Scene
+}
+
+// renderMode returns the active render mode.
+func (s *Server) renderMode() canvas.RenderMode {
+	if s.program != nil {
+		return s.program.Mode
+	}
+	return s.engine.Mode
+}
+
+// termCols returns the terminal column count.
+func (s *Server) termCols() int {
+	if s.program != nil {
+		return s.program.Cols()
+	}
+	return s.engine.Cols()
+}
+
+// termRows returns the terminal row count.
+func (s *Server) termRows() int {
+	if s.program != nil {
+		return s.program.Rows()
+	}
+	return s.engine.Rows()
+}
+
+// events returns the event queue (only available in program mode).
+func (s *Server) events() *widget.EventQueue {
+	if s.program != nil {
+		return s.program.Events
+	}
+	return nil
 }
 
 // Run starts the MCP server on stdio. Blocks until the client disconnects.
@@ -185,6 +262,8 @@ type PanelInfo struct {
 	Effect  string  `json:"effect,omitempty"`
 	Border  string  `json:"border,omitempty"`
 	HasText bool    `json:"has_text,omitempty"`
+	Widget  string  `json:"widget,omitempty"`
+	Focused bool    `json:"focused,omitempty"`
 }
 
 type SimpleOutput struct {
@@ -215,10 +294,10 @@ func (s *Server) handlePanelCreate(ctx context.Context, req *mcp.CallToolRequest
 		id = scene.GenerateID()
 	}
 
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
-	p := scene.NewPanel(id, input.Width, input.Height, s.engine.Mode)
+	p := scene.NewPanel(id, input.Width, input.Height, s.renderMode())
 	p.X = input.X
 	p.Y = input.Y
 	p.Z = input.Z
@@ -247,16 +326,16 @@ func (s *Server) handlePanelCreate(ctx context.Context, req *mcp.CallToolRequest
 	// Initial text
 	p.Text = input.Text
 
-	s.engine.Scene.Add(p)
+	s.scene().Add(p)
 
 	return nil, SimpleOutput{OK: true, ID: id}, nil
 }
 
 func (s *Server) handlePanelUpdate(ctx context.Context, req *mcp.CallToolRequest, input PanelUpdateInput) (*mcp.CallToolResult, SimpleOutput, error) {
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
-	p := s.engine.Scene.Get(input.ID)
+	p := s.scene().Get(input.ID)
 	if p == nil {
 		return errResult("panel not found: " + input.ID)
 	}
@@ -296,17 +375,17 @@ func (s *Server) handlePanelUpdate(ctx context.Context, req *mcp.CallToolRequest
 		}
 		p.Width = w
 		p.Height = h
-		p.Canvas = canvas.New(w, h, s.engine.Mode)
+		p.Canvas = canvas.New(w, h, s.renderMode())
 	}
 
 	return nil, SimpleOutput{OK: true, ID: input.ID}, nil
 }
 
 func (s *Server) handlePanelRemove(ctx context.Context, req *mcp.CallToolRequest, input PanelRemoveInput) (*mcp.CallToolResult, SimpleOutput, error) {
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
-	existed := s.engine.Scene.Remove(input.ID)
+	existed := s.scene().Remove(input.ID)
 	if !existed {
 		return errResult("panel not found: " + input.ID)
 	}
@@ -314,18 +393,18 @@ func (s *Server) handlePanelRemove(ctx context.Context, req *mcp.CallToolRequest
 }
 
 func (s *Server) handlePanelList(ctx context.Context, req *mcp.CallToolRequest, input PanelListInput) (*mcp.CallToolResult, PanelListOutput, error) {
-	s.engine.Lock()
-	panels := s.engine.Scene.Panels()
-	s.engine.Unlock()
+	s.lock()
+	panels := s.scene().Panels()
+	s.unlock()
 
 	return nil, PanelListOutput{Panels: panelInfos(panels), Count: len(panels)}, nil
 }
 
 func (s *Server) handlePanelSetEffect(ctx context.Context, req *mcp.CallToolRequest, input PanelSetEffectInput) (*mcp.CallToolResult, SimpleOutput, error) {
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
-	p := s.engine.Scene.Get(input.ID)
+	p := s.scene().Get(input.ID)
 	if p == nil {
 		return errResult("panel not found: " + input.ID)
 	}
@@ -348,10 +427,10 @@ func (s *Server) handlePanelSetEffect(ctx context.Context, req *mcp.CallToolRequ
 }
 
 func (s *Server) handlePanelSetBorder(ctx context.Context, req *mcp.CallToolRequest, input PanelSetBorderInput) (*mcp.CallToolResult, SimpleOutput, error) {
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
-	p := s.engine.Scene.Get(input.ID)
+	p := s.scene().Get(input.ID)
 	if p == nil {
 		return errResult("panel not found: " + input.ID)
 	}
@@ -374,10 +453,10 @@ func (s *Server) handlePanelSetBorder(ctx context.Context, req *mcp.CallToolRequ
 }
 
 func (s *Server) handlePanelSetText(ctx context.Context, req *mcp.CallToolRequest, input PanelSetTextInput) (*mcp.CallToolResult, SimpleOutput, error) {
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
-	p := s.engine.Scene.Get(input.ID)
+	p := s.scene().Get(input.ID)
 	if p == nil {
 		return errResult("panel not found: " + input.ID)
 	}
@@ -392,23 +471,27 @@ func (s *Server) handleSceneMood(ctx context.Context, req *mcp.CallToolRequest, 
 		return errResult("unknown mood: " + input.Mood + ". Available: " + strings.Join(sortedMoodNames(), ", "))
 	}
 
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	s.lock()
+	defer s.unlock()
 
 	// Create or update the fullscreen mood background panel.
 	const moodID = "_mood_bg"
-	p := s.engine.Scene.Get(moodID)
+	sc := s.scene()
+	cols, rows := s.termCols(), s.termRows()
+	mode := s.renderMode()
+
+	p := sc.Get(moodID)
 	if p == nil {
-		p = scene.NewPanel(moodID, s.engine.Cols(), s.engine.Rows(), s.engine.Mode)
+		p = scene.NewPanel(moodID, cols, rows, mode)
 		p.Z = -100 // well behind everything
-		s.engine.Scene.Add(p)
+		sc.Add(p)
 	}
 
 	// Resize to current terminal size
-	if p.Width != s.engine.Cols() || p.Height != s.engine.Rows() {
-		p.Width = s.engine.Cols()
-		p.Height = s.engine.Rows()
-		p.Canvas = canvas.New(p.Width, p.Height, s.engine.Mode)
+	if p.Width != cols || p.Height != rows {
+		p.Width = cols
+		p.Height = rows
+		p.Canvas = canvas.New(p.Width, p.Height, mode)
 	}
 
 	// Apply mood preset
@@ -427,18 +510,18 @@ func (s *Server) handleSceneMood(ctx context.Context, req *mcp.CallToolRequest, 
 }
 
 func (s *Server) handleSceneClear(ctx context.Context, req *mcp.CallToolRequest, input SceneClearInput) (*mcp.CallToolResult, SimpleOutput, error) {
-	s.engine.Lock()
-	s.engine.Scene.Clear()
-	s.engine.Unlock()
+	s.lock()
+	s.scene().Clear()
+	s.unlock()
 
 	return nil, SimpleOutput{OK: true, Message: "scene cleared"}, nil
 }
 
 func (s *Server) handleSceneSnapshot(ctx context.Context, req *mcp.CallToolRequest, input SceneSnapshotInput) (*mcp.CallToolResult, SceneSnapshotOutput, error) {
-	s.engine.Lock()
-	panels := s.engine.Scene.Panels()
-	cols, rows := s.engine.Cols(), s.engine.Rows()
-	s.engine.Unlock()
+	s.lock()
+	panels := s.scene().Panels()
+	cols, rows := s.termCols(), s.termRows()
+	s.unlock()
 
 	return nil, SceneSnapshotOutput{
 		Panels: panelInfos(panels),
@@ -476,6 +559,10 @@ func panelInfos(panels []*scene.Panel) []PanelInfo {
 		}
 		if p.Border != nil {
 			info.Border = p.Border.Name()
+		}
+		if p.Widget != nil {
+			info.Widget = p.Widget.Type()
+			info.Focused = p.Focused
 		}
 		infos[i] = info
 	}
@@ -539,4 +626,212 @@ func sortedMoodNames() []string {
 func marshalJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// ============================================================
+// Widget tools (only registered in interactive/program mode)
+// ============================================================
+
+type WidgetTextInputInput struct {
+	ID          string  `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X           float64 `json:"x" jsonschema:"X position in cell columns"`
+	Y           float64 `json:"y" jsonschema:"Y position in cell rows"`
+	Width       int     `json:"width" jsonschema:"width in terminal columns"`
+	Placeholder string  `json:"placeholder,omitempty" jsonschema:"placeholder text shown when empty"`
+	Border      string  `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
+	Color       string  `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
+	Focus       *bool   `json:"focus,omitempty" jsonschema:"auto-focus this widget (default true)"`
+}
+
+type WidgetButtonInput struct {
+	ID     string  `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X      float64 `json:"x" jsonschema:"X position in cell columns"`
+	Y      float64 `json:"y" jsonschema:"Y position in cell rows"`
+	Width  int     `json:"width" jsonschema:"width in terminal columns"`
+	Label  string  `json:"label" jsonschema:"button label text"`
+	Border string  `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
+	Color  string  `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
+}
+
+type WidgetGetStateInput struct {
+	ID string `json:"id" jsonschema:"panel ID of the widget"`
+}
+
+type WidgetSetFocusInput struct {
+	ID string `json:"id" jsonschema:"panel ID to focus"`
+}
+
+type WidgetPollEventsInput struct{}
+
+type WidgetStateOutput struct {
+	OK       bool           `json:"ok"`
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	State    map[string]any `json:"state"`
+	Focused  bool           `json:"focused"`
+}
+
+type WidgetEventsOutput struct {
+	Events []widget.Event `json:"events"`
+	Count  int            `json:"count"`
+}
+
+func (s *Server) registerWidgetTools() {
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.text_input",
+		Description: "Create a panel with an interactive text input widget. The terminal user can type into it. Use get_state to read the current value.",
+	}, s.handleWidgetTextInput)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.button",
+		Description: "Create a panel with a clickable button widget. The terminal user can click it or press Enter when focused. Use poll_events to detect clicks.",
+	}, s.handleWidgetButton)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.get_state",
+		Description: "Read a widget panel's current state (text value, button clicks, etc.).",
+	}, s.handleWidgetGetState)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.set_focus",
+		Description: "Focus a specific widget panel so it receives keyboard input.",
+	}, s.handleWidgetSetFocus)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.poll_events",
+		Description: "Get widget events (button clicks, text submissions) since last poll. Events are drained from the queue.",
+	}, s.handleWidgetPollEvents)
+}
+
+func (s *Server) handleWidgetTextInput(ctx context.Context, req *mcp.CallToolRequest, input WidgetTextInputInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	id := input.ID
+	if id == "" {
+		id = scene.GenerateID()
+	}
+
+	// Text input panels are 3 rows tall (border top + input + border bottom)
+	// or 1 row if no border
+	height := 1
+	if input.Border != "" {
+		height = 3
+	}
+
+	s.lock()
+	defer s.unlock()
+
+	p := scene.NewPanel(id, input.Width, height, s.renderMode())
+	p.X = input.X
+	p.Y = input.Y
+
+	if input.Color != "" {
+		p.Fill = canvas.Hex(input.Color)
+	}
+	if input.Border != "" {
+		p.Border = createBorder(input.Border)
+	}
+
+	// Create the text input widget
+	innerWidth := input.Width
+	if input.Border != "" {
+		innerWidth -= 2 // inset for border
+	}
+	ti := widget.NewTextInput(innerWidth, input.Placeholder)
+	ti.EventQueue = s.events()
+	ti.PanelID = id
+	p.Widget = ti
+
+	s.scene().Add(p)
+
+	// Auto-focus unless explicitly disabled
+	if input.Focus == nil || *input.Focus {
+		s.scene().Focus(id)
+	}
+
+	return nil, SimpleOutput{OK: true, ID: id, Message: "text input created"}, nil
+}
+
+func (s *Server) handleWidgetButton(ctx context.Context, req *mcp.CallToolRequest, input WidgetButtonInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	id := input.ID
+	if id == "" {
+		id = scene.GenerateID()
+	}
+
+	height := 1
+	if input.Border != "" {
+		height = 3
+	}
+
+	s.lock()
+	defer s.unlock()
+
+	p := scene.NewPanel(id, input.Width, height, s.renderMode())
+	p.X = input.X
+	p.Y = input.Y
+
+	if input.Color != "" {
+		p.Fill = canvas.Hex(input.Color)
+	}
+	if input.Border != "" {
+		p.Border = createBorder(input.Border)
+	}
+
+	innerWidth := input.Width
+	if input.Border != "" {
+		innerWidth -= 2
+	}
+	btn := widget.NewButton(input.Label, innerWidth)
+	btn.EventQueue = s.events()
+	btn.PanelID = id
+	p.Widget = btn
+
+	s.scene().Add(p)
+
+	return nil, SimpleOutput{OK: true, ID: id, Message: "button created"}, nil
+}
+
+func (s *Server) handleWidgetGetState(ctx context.Context, req *mcp.CallToolRequest, input WidgetGetStateInput) (*mcp.CallToolResult, WidgetStateOutput, error) {
+	s.lock()
+	defer s.unlock()
+
+	p := s.scene().Get(input.ID)
+	if p == nil {
+		return &mcp.CallToolResult{IsError: true}, WidgetStateOutput{OK: false, ID: input.ID}, nil
+	}
+	if p.Widget == nil {
+		return &mcp.CallToolResult{IsError: true}, WidgetStateOutput{OK: false, ID: input.ID}, nil
+	}
+
+	return nil, WidgetStateOutput{
+		OK:      true,
+		ID:      input.ID,
+		Type:    p.Widget.Type(),
+		State:   p.Widget.State(),
+		Focused: p.Focused,
+	}, nil
+}
+
+func (s *Server) handleWidgetSetFocus(ctx context.Context, req *mcp.CallToolRequest, input WidgetSetFocusInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	s.lock()
+	defer s.unlock()
+
+	p := s.scene().Get(input.ID)
+	if p == nil {
+		return errResult("panel not found: " + input.ID)
+	}
+	if p.Widget == nil {
+		return errResult("panel has no widget: " + input.ID)
+	}
+
+	s.scene().Focus(input.ID)
+	return nil, SimpleOutput{OK: true, ID: input.ID, Message: "focused"}, nil
+}
+
+func (s *Server) handleWidgetPollEvents(ctx context.Context, req *mcp.CallToolRequest, input WidgetPollEventsInput) (*mcp.CallToolResult, WidgetEventsOutput, error) {
+	eq := s.events()
+	if eq == nil {
+		return nil, WidgetEventsOutput{Events: []widget.Event{}, Count: 0}, nil
+	}
+
+	events := eq.Drain()
+	return nil, WidgetEventsOutput{Events: events, Count: len(events)}, nil
 }

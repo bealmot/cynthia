@@ -95,6 +95,11 @@ func (e *Engine) Step() {
 			p.Border.Render(p.Canvas, 0, 0, p.Width, p.Height)
 		}
 
+		// Widget → dynamically update text content each frame
+		if p.Widget != nil {
+			p.Text = p.Widget.View()
+		}
+
 		// Text → cell grid (stamped over border interior)
 		if p.Text != "" {
 			stampText(p.Canvas, p.Text, p.Border != nil)
