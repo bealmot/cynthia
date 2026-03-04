@@ -72,6 +72,23 @@ func (s *Scene) Panels() []*Panel {
 	return out
 }
 
+// PanelsForScope returns panels sorted by Z-order, filtered to those visible
+// in the given scope. Panels with empty Scope or "global" appear in all scopes.
+// Fixed panels (prefixed with "_") always appear regardless of scope.
+func (s *Scene) PanelsForScope(scope string) []*Panel {
+	all := s.Panels()
+	if scope == "" {
+		return all
+	}
+	out := make([]*Panel, 0, len(all))
+	for _, p := range all {
+		if p.Scope == "" || p.Scope == "global" || p.Scope == scope || len(p.ID) > 0 && p.ID[0] == '_' {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Count returns the number of panels in the scene.
 func (s *Scene) Count() int {
 	return len(s.panels)
@@ -135,9 +152,15 @@ func (s *Scene) widgetPanels() []*Panel {
 }
 
 // HitTest finds the topmost visible panel containing the cell coordinate (x, y).
-// Searches in reverse Z order (highest Z first).
-func (s *Scene) HitTest(x, y int) *Panel {
-	panels := s.Panels()
+// Searches in reverse Z order (highest Z first). Only considers panels visible
+// in the given scope (empty scope matches all).
+func (s *Scene) HitTest(x, y int, scope ...string) *Panel {
+	var panels []*Panel
+	if len(scope) > 0 && scope[0] != "" {
+		panels = s.PanelsForScope(scope[0])
+	} else {
+		panels = s.Panels()
+	}
 	// Reverse iterate: highest Z (last in sorted slice) = topmost
 	for i := len(panels) - 1; i >= 0; i-- {
 		p := panels[i]

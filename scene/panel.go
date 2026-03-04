@@ -44,6 +44,11 @@ type Panel struct {
 	MaskType   string
 	MaskParams map[string]float64
 
+	// Scope controls which tab this panel appears on.
+	// Empty string or "global" means visible on all tabs.
+	// Otherwise must match a tab name: "chat", "journal", "recommendations", "system", "settings".
+	Scope string
+
 	// Interactive widget (optional). When set, Widget.View() overrides Text each frame.
 	Widget  widget.Widget
 	Focused bool
