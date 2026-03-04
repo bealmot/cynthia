@@ -7,6 +7,7 @@ import (
 	"github.com/bealmot/cynthia/border"
 	"github.com/bealmot/cynthia/canvas"
 	"github.com/bealmot/cynthia/compose"
+	"github.com/bealmot/cynthia/director"
 	"github.com/bealmot/cynthia/effect"
 	"github.com/bealmot/cynthia/widget"
 )
@@ -35,6 +36,14 @@ type Panel struct {
 	Text   string         // ANSI text content stamped onto cell grid
 	Border border.Border  // animated border drawn on cell grid
 
+	// Per-panel spring interpolation (optional). When set, params are smoothly
+	// transitioned each frame rather than snapping instantly.
+	Director *director.PanelDirector
+
+	// Spatial mask (optional). When set, constrains the effect to a region.
+	MaskType   string
+	MaskParams map[string]float64
+
 	// Interactive widget (optional). When set, Widget.View() overrides Text each frame.
 	Widget  widget.Widget
 	Focused bool
@@ -52,6 +61,51 @@ func NewPanel(id string, width, height int, mode canvas.RenderMode) *Panel {
 		Visible: true,
 		Blend:   compose.BlendNormal,
 	}
+}
+
+// UpdateMask regenerates the canvas mask buffer from MaskType and MaskParams.
+// Should be called when the canvas is resized or mask settings change.
+func (p *Panel) UpdateMask() {
+	c := p.Canvas
+	if p.MaskType == "" || p.MaskType == "none" {
+		c.ClearMask()
+		return
+	}
+
+	mp := p.MaskParams
+	get := func(key string, def float64) float64 {
+		if v, ok := mp[key]; ok {
+			return v
+		}
+		return def
+	}
+
+	var mask []float64
+	switch p.MaskType {
+	case "circle":
+		mask = canvas.MaskCircle(c.Width, c.Height,
+			get("cx", 0.5), get("cy", 0.5), get("radius", 0.4), get("feather", 0.1))
+	case "rect":
+		mask = canvas.MaskRect(c.Width, c.Height,
+			get("x", 0.1), get("y", 0.1), get("width", 0.8), get("height", 0.8), get("feather", 0.1))
+	case "gradient":
+		dir := canvas.MaskDirTopToBottom
+		if d, ok := mp["direction"]; ok {
+			switch int(d) {
+			case 1:
+				dir = canvas.MaskDirLeftToRight
+			case 2:
+				dir = canvas.MaskDirRadial
+			}
+		}
+		mask = canvas.MaskGradient(c.Width, c.Height, dir, get("start", 0), get("end", 1))
+	case "vignette":
+		mask = canvas.MaskVignette(c.Width, c.Height, get("strength", 0.8))
+	default:
+		c.ClearMask()
+		return
+	}
+	c.SetMask(mask)
 }
 
 // CellX returns the integer cell column for compositing.

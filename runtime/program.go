@@ -148,8 +148,18 @@ func (m *programModel) renderFrame() {
 		}
 
 		if pan.Effect != nil {
+			// Per-panel spring interpolation: step springs and push params before render.
+			if pan.Director != nil {
+				params := pan.Director.Step(dt)
+				pan.Effect.SetParams(params)
+			}
 			pan.Effect.Step(frame, dt)
 			pan.Effect.Render(pan.Canvas)
+		}
+
+		// Apply spatial mask after effect render.
+		if pan.Canvas.Mask != nil {
+			pan.Canvas.ApplyMask()
 		}
 
 		if pan.Border != nil {

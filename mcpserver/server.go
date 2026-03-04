@@ -156,6 +156,11 @@ func (s *Server) registerTools() {
 	}, s.handlePanelSetEffect)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.panel.set_params",
+		Description: "Smoothly transition effect parameters using spring interpolation. Sets target values that the panel's springs animate toward over multiple frames.",
+	}, s.handlePanelSetParams)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "cynthia.panel.set_border",
 		Description: "Set an animated border on a panel. Styles: cascade, nouveau, pulse. Set style to empty string to clear.",
 	}, s.handlePanelSetBorder)
@@ -186,32 +191,40 @@ func (s *Server) registerTools() {
 // Tool input types
 // ============================================================
 
+// MaskInput defines a spatial mask configuration.
+type MaskInput struct {
+	Type   string             `json:"type" jsonschema:"mask type: circle, rect, gradient, vignette, none"`
+	Params map[string]float64 `json:"params,omitempty" jsonschema:"mask parameters (e.g. cx, cy, radius, feather, strength)"`
+}
+
 type PanelCreateInput struct {
-	ID      string  `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
-	X       float64 `json:"x" jsonschema:"X position in cell columns"`
-	Y       float64 `json:"y" jsonschema:"Y position in cell rows"`
-	Width   int     `json:"width" jsonschema:"width in terminal columns"`
-	Height  int     `json:"height" jsonschema:"height in terminal rows"`
-	Z       int     `json:"z,omitempty" jsonschema:"z-order (lower = further back)"`
+	ID      string   `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X       float64  `json:"x" jsonschema:"X position in cell columns"`
+	Y       float64  `json:"y" jsonschema:"Y position in cell rows"`
+	Width   int      `json:"width" jsonschema:"width in terminal columns"`
+	Height  int      `json:"height" jsonschema:"height in terminal rows"`
+	Z       int      `json:"z,omitempty" jsonschema:"z-order (lower = further back)"`
 	Opacity *float64 `json:"opacity,omitempty" jsonschema:"0.0-1.0, default 1.0"`
-	Blend   string  `json:"blend,omitempty" jsonschema:"normal, screen, additive, multiply"`
-	Color   string  `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB or #RGB), default transparent"`
-	Effect  string  `json:"effect,omitempty" jsonschema:"initial effect name (fire, plasma, matrix, gradient, particles, starfield)"`
-	Border  string  `json:"border,omitempty" jsonschema:"initial border style (cascade, nouveau, pulse)"`
-	Text    string  `json:"text,omitempty" jsonschema:"initial text content"`
+	Blend   string   `json:"blend,omitempty" jsonschema:"normal, screen, additive, multiply"`
+	Color   string   `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB or #RGB), default transparent"`
+	Effect  string   `json:"effect,omitempty" jsonschema:"initial effect name (fire, plasma, matrix, gradient, particles, starfield)"`
+	Border  string   `json:"border,omitempty" jsonschema:"initial border style (cascade, nouveau, pulse)"`
+	Text    string   `json:"text,omitempty" jsonschema:"initial text content"`
+	Mask    *MaskInput `json:"mask,omitempty" jsonschema:"spatial mask (circle, rect, gradient, vignette)"`
 }
 
 type PanelUpdateInput struct {
-	ID      string   `json:"id" jsonschema:"panel ID to update"`
-	X       *float64 `json:"x,omitempty" jsonschema:"new X position"`
-	Y       *float64 `json:"y,omitempty" jsonschema:"new Y position"`
-	Width   *int     `json:"width,omitempty" jsonschema:"new width"`
-	Height  *int     `json:"height,omitempty" jsonschema:"new height"`
-	Z       *int     `json:"z,omitempty" jsonschema:"new z-order"`
-	Opacity *float64 `json:"opacity,omitempty" jsonschema:"new opacity"`
-	Visible *bool    `json:"visible,omitempty" jsonschema:"visibility toggle"`
-	Blend   string   `json:"blend,omitempty" jsonschema:"new blend mode"`
-	Color   *string  `json:"color,omitempty" jsonschema:"new fill color (#RRGGBB), empty string for transparent"`
+	ID      string     `json:"id" jsonschema:"panel ID to update"`
+	X       *float64   `json:"x,omitempty" jsonschema:"new X position"`
+	Y       *float64   `json:"y,omitempty" jsonschema:"new Y position"`
+	Width   *int       `json:"width,omitempty" jsonschema:"new width"`
+	Height  *int       `json:"height,omitempty" jsonschema:"new height"`
+	Z       *int       `json:"z,omitempty" jsonschema:"new z-order"`
+	Opacity *float64   `json:"opacity,omitempty" jsonschema:"new opacity"`
+	Visible *bool      `json:"visible,omitempty" jsonschema:"visibility toggle"`
+	Blend   string     `json:"blend,omitempty" jsonschema:"new blend mode"`
+	Color   *string    `json:"color,omitempty" jsonschema:"new fill color (#RRGGBB), empty string for transparent"`
+	Mask    *MaskInput `json:"mask,omitempty" jsonschema:"spatial mask (circle, rect, gradient, vignette, none to clear)"`
 }
 
 type PanelRemoveInput struct {
@@ -221,9 +234,16 @@ type PanelRemoveInput struct {
 type PanelListInput struct{}
 
 type PanelSetEffectInput struct {
-	ID     string             `json:"id" jsonschema:"panel ID"`
-	Effect string             `json:"effect" jsonschema:"effect name (fire, plasma, matrix, gradient, particles, starfield) or empty to clear"`
-	Params map[string]float64 `json:"params,omitempty" jsonschema:"effect parameters (e.g. intensity, speed, decay)"`
+	ID      string             `json:"id" jsonschema:"panel ID"`
+	Effect  string             `json:"effect,omitempty" jsonschema:"single effect name, or empty to clear"`
+	Effects []string           `json:"effects,omitempty" jsonschema:"effect pipeline (e.g. [plasma, crt]) — stage 1+ act as post-processors"`
+	Params  map[string]float64 `json:"params,omitempty" jsonschema:"effect parameters. For chains, prefix with stage index: 0.speed, 1.scanlines"`
+}
+
+type PanelSetParamsInput struct {
+	ID              string             `json:"id" jsonschema:"panel ID"`
+	Params          map[string]float64 `json:"params" jsonschema:"parameter targets to spring-interpolate toward"`
+	TransitionSpeed *float64           `json:"transition_speed,omitempty" jsonschema:"spring frequency multiplier (higher = snappier), default 1.0"`
 }
 
 type PanelSetBorderInput struct {
@@ -261,6 +281,7 @@ type PanelInfo struct {
 	Blend   string  `json:"blend"`
 	Effect  string  `json:"effect,omitempty"`
 	Border  string  `json:"border,omitempty"`
+	Mask    string  `json:"mask,omitempty"`
 	HasText bool    `json:"has_text,omitempty"`
 	Widget  string  `json:"widget,omitempty"`
 	Focused bool    `json:"focused,omitempty"`
@@ -326,6 +347,11 @@ func (s *Server) handlePanelCreate(ctx context.Context, req *mcp.CallToolRequest
 	// Initial text
 	p.Text = input.Text
 
+	// Initial mask
+	if input.Mask != nil {
+		applyMask(p, input.Mask)
+	}
+
 	s.scene().Add(p)
 
 	return nil, SimpleOutput{OK: true, ID: id}, nil
@@ -376,6 +402,14 @@ func (s *Server) handlePanelUpdate(ctx context.Context, req *mcp.CallToolRequest
 		p.Width = w
 		p.Height = h
 		p.Canvas = canvas.New(w, h, s.renderMode())
+		// Regenerate mask for new canvas dimensions.
+		if p.MaskType != "" {
+			p.UpdateMask()
+		}
+	}
+
+	if input.Mask != nil {
+		applyMask(p, input.Mask)
 	}
 
 	return nil, SimpleOutput{OK: true, ID: input.ID}, nil
@@ -409,21 +443,83 @@ func (s *Server) handlePanelSetEffect(ctx context.Context, req *mcp.CallToolRequ
 		return errResult("panel not found: " + input.ID)
 	}
 
-	if input.Effect == "" {
+	// Effect chain: multiple effects pipelined together.
+	if len(input.Effects) > 1 {
+		stages := make([]effect.Effect, 0, len(input.Effects))
+		for _, name := range input.Effects {
+			fx := effect.Create(name)
+			if fx == nil {
+				return errResult("unknown effect: " + name + ". Available: " + strings.Join(sortedEffectNames(), ", "))
+			}
+			stages = append(stages, fx)
+		}
+		chain := effect.NewChain(stages...)
+		if len(input.Params) > 0 {
+			chain.SetParams(input.Params)
+		}
+		p.Effect = chain
+		p.Director = nil
+		return nil, SimpleOutput{OK: true, ID: input.ID, Message: "effect chain set: " + strings.Join(input.Effects, " → ")}, nil
+	}
+
+	// Single effect (from Effect or Effects[0]).
+	effectName := input.Effect
+	if effectName == "" && len(input.Effects) == 1 {
+		effectName = input.Effects[0]
+	}
+
+	if effectName == "" {
 		p.Effect = nil
+		p.Director = nil
 		return nil, SimpleOutput{OK: true, ID: input.ID, Message: "effect cleared"}, nil
 	}
 
-	fx := effect.Create(input.Effect)
+	fx := effect.Create(effectName)
 	if fx == nil {
-		return errResult("unknown effect: " + input.Effect + ". Available: " + strings.Join(sortedEffectNames(), ", "))
+		return errResult("unknown effect: " + effectName + ". Available: " + strings.Join(sortedEffectNames(), ", "))
 	}
 	if len(input.Params) > 0 {
 		fx.SetParams(input.Params)
 	}
 	p.Effect = fx
+	// Reset per-panel director on effect change (old springs are stale).
+	p.Director = nil
 
-	return nil, SimpleOutput{OK: true, ID: input.ID, Message: "effect set to " + input.Effect}, nil
+	return nil, SimpleOutput{OK: true, ID: input.ID, Message: "effect set to " + effectName}, nil
+}
+
+func (s *Server) handlePanelSetParams(ctx context.Context, req *mcp.CallToolRequest, input PanelSetParamsInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	s.lock()
+	defer s.unlock()
+
+	p := s.scene().Get(input.ID)
+	if p == nil {
+		return errResult("panel not found: " + input.ID)
+	}
+	if p.Effect == nil {
+		return errResult("panel has no effect: " + input.ID)
+	}
+
+	// Create a PanelDirector if the panel doesn't have one yet.
+	if p.Director == nil {
+		speed := 1.0
+		if input.TransitionSpeed != nil {
+			speed = *input.TransitionSpeed
+		}
+		p.Director = director.NewPanelDirector(speed)
+
+		// Seed springs from current effect params so we interpolate from current values.
+		for k, v := range p.Effect.Params() {
+			p.Director.SetTarget(k, v)
+		}
+	} else if input.TransitionSpeed != nil {
+		p.Director.SetSpeed(*input.TransitionSpeed)
+	}
+
+	// Set spring targets for the requested params.
+	p.Director.SetTargets(input.Params)
+
+	return nil, SimpleOutput{OK: true, ID: input.ID, Message: "spring targets set"}, nil
 }
 
 func (s *Server) handlePanelSetBorder(ctx context.Context, req *mcp.CallToolRequest, input PanelSetBorderInput) (*mcp.CallToolResult, SimpleOutput, error) {
@@ -560,6 +656,9 @@ func panelInfos(panels []*scene.Panel) []PanelInfo {
 		if p.Border != nil {
 			info.Border = p.Border.Name()
 		}
+		if p.MaskType != "" && p.MaskType != "none" {
+			info.Mask = p.MaskType
+		}
 		if p.Widget != nil {
 			info.Widget = p.Widget.Type()
 			info.Focused = p.Focused
@@ -623,6 +722,12 @@ func sortedMoodNames() []string {
 	return names
 }
 
+func applyMask(p *scene.Panel, m *MaskInput) {
+	p.MaskType = m.Type
+	p.MaskParams = m.Params
+	p.UpdateMask()
+}
+
 func marshalJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
@@ -651,6 +756,52 @@ type WidgetButtonInput struct {
 	Label  string  `json:"label" jsonschema:"button label text"`
 	Border string  `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
 	Color  string  `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
+}
+
+type WidgetProgressBarInput struct {
+	ID     string  `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X      float64 `json:"x" jsonschema:"X position in cell columns"`
+	Y      float64 `json:"y" jsonschema:"Y position in cell rows"`
+	Width  int     `json:"width" jsonschema:"width in terminal columns"`
+	Label  string  `json:"label,omitempty" jsonschema:"label text shown before the bar"`
+	Value  float64 `json:"value,omitempty" jsonschema:"initial value 0.0-1.0"`
+	Style  string  `json:"style,omitempty" jsonschema:"bar style: block (default) or ascii"`
+	Border string  `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
+	Color  string  `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
+}
+
+type WidgetSparklineInput struct {
+	ID     string    `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X      float64   `json:"x" jsonschema:"X position in cell columns"`
+	Y      float64   `json:"y" jsonschema:"Y position in cell rows"`
+	Width  int       `json:"width" jsonschema:"width in terminal columns"`
+	Label  string    `json:"label,omitempty" jsonschema:"label text shown before the sparkline"`
+	Values []float64 `json:"values,omitempty" jsonschema:"initial data values"`
+	Border string    `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
+	Color  string    `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
+}
+
+type WidgetSelectListInput struct {
+	ID     string   `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X      float64  `json:"x" jsonschema:"X position in cell columns"`
+	Y      float64  `json:"y" jsonschema:"Y position in cell rows"`
+	Width  int      `json:"width" jsonschema:"width in terminal columns"`
+	Items  []string `json:"items" jsonschema:"list of selectable items"`
+	Height int      `json:"height,omitempty" jsonschema:"visible rows (default: number of items, max 10)"`
+	Border string   `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
+	Color  string   `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
+	Focus  *bool    `json:"focus,omitempty" jsonschema:"auto-focus this widget (default true)"`
+}
+
+type WidgetTableInput struct {
+	ID      string     `json:"id,omitempty" jsonschema:"optional panel ID; auto-generated if omitted"`
+	X       float64    `json:"x" jsonschema:"X position in cell columns"`
+	Y       float64    `json:"y" jsonschema:"Y position in cell rows"`
+	Width   int        `json:"width" jsonschema:"width in terminal columns"`
+	Headers []string   `json:"headers" jsonschema:"column header names"`
+	Rows    [][]string `json:"rows,omitempty" jsonschema:"initial data rows"`
+	Border  string     `json:"border,omitempty" jsonschema:"border style (cascade, nouveau, pulse)"`
+	Color   string     `json:"color,omitempty" jsonschema:"fill color as hex (#RRGGBB)"`
 }
 
 type WidgetGetStateInput struct {
@@ -686,6 +837,26 @@ func (s *Server) registerWidgetTools() {
 		Name:        "cynthia.widget.button",
 		Description: "Create a panel with a clickable button widget. The terminal user can click it or press Enter when focused. Use poll_events to detect clicks.",
 	}, s.handleWidgetButton)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.progress_bar",
+		Description: "Create a panel with a progress bar widget. Display-only — use get_state to read, set value via update. Shows [████░░░░] style bar.",
+	}, s.handleWidgetProgressBar)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.sparkline",
+		Description: "Create a panel with a sparkline widget. Display-only — shows values as ▁▂▃▄▅▆▇█ bars. Push values via MCP to update.",
+	}, s.handleWidgetSparkline)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.select_list",
+		Description: "Create a panel with an interactive selection list. User navigates with up/down arrows and selects with Enter. Use poll_events to detect selections.",
+	}, s.handleWidgetSelectList)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "cynthia.widget.table",
+		Description: "Create a panel with a table widget. Renders tabular data with box-drawing characters (┌─┬─┐). Display-only.",
+	}, s.handleWidgetTable)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "cynthia.widget.get_state",
@@ -834,4 +1005,179 @@ func (s *Server) handleWidgetPollEvents(ctx context.Context, req *mcp.CallToolRe
 
 	events := eq.Drain()
 	return nil, WidgetEventsOutput{Events: events, Count: len(events)}, nil
+}
+
+func (s *Server) handleWidgetProgressBar(ctx context.Context, req *mcp.CallToolRequest, input WidgetProgressBarInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	id := input.ID
+	if id == "" {
+		id = scene.GenerateID()
+	}
+
+	height := 1
+	if input.Border != "" {
+		height = 3
+	}
+
+	s.lock()
+	defer s.unlock()
+
+	p := scene.NewPanel(id, input.Width, height, s.renderMode())
+	p.X = input.X
+	p.Y = input.Y
+
+	if input.Color != "" {
+		p.Fill = canvas.Hex(input.Color)
+	}
+	if input.Border != "" {
+		p.Border = createBorder(input.Border)
+	}
+
+	innerWidth := input.Width
+	if input.Border != "" {
+		innerWidth -= 2
+	}
+	pb := widget.NewProgressBar(innerWidth, input.Label)
+	pb.SetValue(input.Value)
+	if input.Style != "" {
+		pb.SetStyle(input.Style)
+	}
+	pb.EventQueue = s.events()
+	pb.PanelID = id
+	p.Widget = pb
+
+	s.scene().Add(p)
+
+	return nil, SimpleOutput{OK: true, ID: id, Message: "progress bar created"}, nil
+}
+
+func (s *Server) handleWidgetSparkline(ctx context.Context, req *mcp.CallToolRequest, input WidgetSparklineInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	id := input.ID
+	if id == "" {
+		id = scene.GenerateID()
+	}
+
+	height := 1
+	if input.Border != "" {
+		height = 3
+	}
+
+	s.lock()
+	defer s.unlock()
+
+	p := scene.NewPanel(id, input.Width, height, s.renderMode())
+	p.X = input.X
+	p.Y = input.Y
+
+	if input.Color != "" {
+		p.Fill = canvas.Hex(input.Color)
+	}
+	if input.Border != "" {
+		p.Border = createBorder(input.Border)
+	}
+
+	innerWidth := input.Width
+	if input.Border != "" {
+		innerWidth -= 2
+	}
+	sp := widget.NewSparkline(innerWidth, input.Label)
+	if len(input.Values) > 0 {
+		sp.SetValues(input.Values)
+	}
+	sp.EventQueue = s.events()
+	sp.PanelID = id
+	p.Widget = sp
+
+	s.scene().Add(p)
+
+	return nil, SimpleOutput{OK: true, ID: id, Message: "sparkline created"}, nil
+}
+
+func (s *Server) handleWidgetSelectList(ctx context.Context, req *mcp.CallToolRequest, input WidgetSelectListInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	id := input.ID
+	if id == "" {
+		id = scene.GenerateID()
+	}
+
+	visibleRows := input.Height
+	if visibleRows <= 0 {
+		visibleRows = len(input.Items)
+		if visibleRows > 10 {
+			visibleRows = 10
+		}
+	}
+
+	panelHeight := visibleRows
+	if input.Border != "" {
+		panelHeight += 2
+	}
+
+	s.lock()
+	defer s.unlock()
+
+	p := scene.NewPanel(id, input.Width, panelHeight, s.renderMode())
+	p.X = input.X
+	p.Y = input.Y
+
+	if input.Color != "" {
+		p.Fill = canvas.Hex(input.Color)
+	}
+	if input.Border != "" {
+		p.Border = createBorder(input.Border)
+	}
+
+	sl := widget.NewSelectList(input.Items, visibleRows)
+	sl.EventQueue = s.events()
+	sl.PanelID = id
+	p.Widget = sl
+
+	s.scene().Add(p)
+
+	if input.Focus == nil || *input.Focus {
+		s.scene().Focus(id)
+	}
+
+	return nil, SimpleOutput{OK: true, ID: id, Message: "select list created"}, nil
+}
+
+func (s *Server) handleWidgetTable(ctx context.Context, req *mcp.CallToolRequest, input WidgetTableInput) (*mcp.CallToolResult, SimpleOutput, error) {
+	id := input.ID
+	if id == "" {
+		id = scene.GenerateID()
+	}
+
+	// Table height: header (1) + separator (1) + rows + top/bottom borders (2) + optional panel border
+	panelHeight := 3 + len(input.Rows) // top + header + separator + rows + bottom
+	if input.Border != "" {
+		panelHeight += 2
+	}
+
+	s.lock()
+	defer s.unlock()
+
+	p := scene.NewPanel(id, input.Width, panelHeight, s.renderMode())
+	p.X = input.X
+	p.Y = input.Y
+
+	if input.Color != "" {
+		p.Fill = canvas.Hex(input.Color)
+	}
+	if input.Border != "" {
+		p.Border = createBorder(input.Border)
+	}
+
+	innerWidth := input.Width
+	if input.Border != "" {
+		innerWidth -= 2
+	}
+	tbl := widget.NewTable(input.Headers, innerWidth)
+	if len(input.Rows) > 0 {
+		tbl.SetRows(input.Rows)
+	}
+	tbl.EventQueue = s.events()
+	tbl.PanelID = id
+	p.Widget = tbl
+
+	s.scene().Add(p)
+
+	return nil, SimpleOutput{OK: true, ID: id, Message: "table created"}, nil
 }

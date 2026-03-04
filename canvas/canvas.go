@@ -18,6 +18,10 @@ type Canvas struct {
 	Width, Height int
 	Pixels        []Color
 
+	// Alpha mask — same dimensions as Pixels. nil = no mask.
+	// Each value in [0,1] multiplies the corresponding pixel's alpha.
+	Mask []float64
+
 	// Cell grid — terminal dimensions
 	CellW, CellH int
 	Cells         []Cell
@@ -48,6 +52,34 @@ func New(cols, rows int, mode RenderMode) *Canvas {
 // Resize changes the canvas dimensions, reallocating buffers.
 func (c *Canvas) Resize(cols, rows int) {
 	*c = *New(cols, rows, c.Mode)
+}
+
+// SetMask sets an alpha mask buffer. Must match pixel dimensions (Width*Height).
+func (c *Canvas) SetMask(mask []float64) {
+	if len(mask) == c.Width*c.Height {
+		c.Mask = mask
+	}
+}
+
+// ClearMask removes the mask.
+func (c *Canvas) ClearMask() {
+	c.Mask = nil
+}
+
+// ApplyMask multiplies each pixel's channels by the corresponding mask value.
+func (c *Canvas) ApplyMask() {
+	if c.Mask == nil {
+		return
+	}
+	for i, m := range c.Mask {
+		if i >= len(c.Pixels) {
+			break
+		}
+		c.Pixels[i].R *= m
+		c.Pixels[i].G *= m
+		c.Pixels[i].B *= m
+		c.Pixels[i].A *= m
+	}
 }
 
 // SetPixel sets a pixel color at (x, y) in pixel coordinates.
