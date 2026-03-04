@@ -19,9 +19,14 @@ type Cell struct {
 	Attr Attrs
 }
 
-// IsTransparent returns true if both fg and bg are fully transparent.
+// IsTransparent returns true if the cell has nothing visible to draw.
+// A space or null rune with transparent BG is visually transparent regardless
+// of FG color, since there is no glyph to render.
 func (c Cell) IsTransparent() bool {
-	return c.FG.A <= 0 && c.BG.A <= 0 && c.Rune == 0
+	if c.BG.A <= 0 && (c.Rune == ' ' || c.Rune == 0) {
+		return true
+	}
+	return c.FG.A <= 0 && c.BG.A <= 0
 }
 
 // EmptyCell returns a transparent cell.

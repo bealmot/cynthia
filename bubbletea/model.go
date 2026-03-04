@@ -1,8 +1,6 @@
 package bubbletea
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/bealmot/cynthia/canvas"
 	"github.com/bealmot/cynthia/compose"
@@ -125,7 +123,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // This is how the parent TUI passes its normal UI rendering into the compositor.
 func (m *Model) SetContent(s string) {
 	m.contentLayer.Canvas.Clear(canvas.Transparent)
-	parseANSIToCells(s, m.contentLayer.Canvas)
+	canvas.ParseANSIToCells(s, m.contentLayer.Canvas)
 }
 
 // View composites all layers and returns the result as a tea.View.
@@ -142,120 +140,3 @@ func (m *Model) Director() *director.Director {
 	return m.director
 }
 
-// parseANSIToCells is a simplified ANSI parser that extracts visible characters
-// and their colors from an ANSI-formatted string onto the cell grid.
-func parseANSIToCells(s string, c *canvas.Canvas) {
-	col, row := 0, 0
-	fg := canvas.Color{R: 1, G: 1, B: 1, A: 1} // default white
-	bg := canvas.Transparent
-
-	i := 0
-	for i < len(s) {
-		if s[i] == '\n' {
-			row++
-			col = 0
-			i++
-			continue
-		}
-
-		// Parse ANSI escape sequence
-		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
-			// Find the end of the escape sequence
-			j := i + 2
-			for j < len(s) && !isCSITerminator(s[j]) {
-				j++
-			}
-			if j < len(s) {
-				// Parse SGR (Select Graphic Rendition)
-				if s[j] == 'm' {
-					params := s[i+2 : j]
-					fg, bg = parseSGR(params, fg, bg)
-				}
-				i = j + 1
-			} else {
-				i = j
-			}
-			continue
-		}
-
-		// Regular character — place it on the cell grid
-		if col < c.CellW && row < c.CellH {
-			r := rune(s[i])
-			// Handle multi-byte UTF-8
-			if r >= 0x80 {
-				runes := []rune(s[i:])
-				if len(runes) > 0 {
-					r = runes[0]
-					i += len(string(r)) - 1
-				}
-			}
-			c.SetCell(col, row, canvas.Cell{
-				Rune: r,
-				FG:   fg,
-				BG:   bg,
-			})
-		}
-		col++
-		i++
-	}
-}
-
-func isCSITerminator(b byte) bool {
-	return b >= 0x40 && b <= 0x7E
-}
-
-// parseSGR handles ANSI SGR (m) sequences to extract fg/bg colors.
-func parseSGR(params string, fg, bg canvas.Color) (canvas.Color, canvas.Color) {
-	if params == "" || params == "0" {
-		return canvas.Color{R: 1, G: 1, B: 1, A: 1}, canvas.Transparent
-	}
-
-	parts := strings.Split(params, ";")
-	for i := 0; i < len(parts); i++ {
-		switch parts[i] {
-		case "0": // reset
-			fg = canvas.Color{R: 1, G: 1, B: 1, A: 1}
-			bg = canvas.Transparent
-		case "38": // set fg
-			if i+1 < len(parts) && parts[i+1] == "2" && i+4 < len(parts) {
-				// 24-bit: 38;2;r;g;b
-				r := parseUint8(parts[i+2])
-				g := parseUint8(parts[i+3])
-				b := parseUint8(parts[i+4])
-				fg = canvas.RGB8(r, g, b)
-				i += 4
-			} else if i+1 < len(parts) && parts[i+1] == "5" && i+2 < len(parts) {
-				// 256-color: 38;5;n — just use the value as-is
-				i += 2
-			}
-		case "48": // set bg
-			if i+1 < len(parts) && parts[i+1] == "2" && i+4 < len(parts) {
-				r := parseUint8(parts[i+2])
-				g := parseUint8(parts[i+3])
-				b := parseUint8(parts[i+4])
-				bg = canvas.RGB8(r, g, b)
-				i += 4
-			} else if i+1 < len(parts) && parts[i+1] == "5" && i+2 < len(parts) {
-				i += 2
-			}
-		case "39": // default fg
-			fg = canvas.Color{R: 1, G: 1, B: 1, A: 1}
-		case "49": // default bg
-			bg = canvas.Transparent
-		}
-	}
-	return fg, bg
-}
-
-func parseUint8(s string) uint8 {
-	var v int
-	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			v = v*10 + int(c-'0')
-		}
-	}
-	if v > 255 {
-		v = 255
-	}
-	return uint8(v)
-}
